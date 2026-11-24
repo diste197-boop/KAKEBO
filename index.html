@@ -442,7 +442,8 @@ function viewSettings() {
     <div class="card">
       <div class="small mute">Ultimo backup: <b>${lb ? new Date(lb).toLocaleString('it-IT', {dateStyle: 'medium', timeStyle: 'short'}) : 'mai'}</b></div>
       <div class="row"><button class="btn" data-act="backup">Salva backup</button><button class="btn ghost" data-act="restore">Ripristina</button></div>
-      <p class="small mute" style="margin-bottom:0">Si apre il menu Condividi di Android: scegli <b>Drive</b> e la cartella. Per ripristinare scegli il file salvato.</p>
+      <div class="row" style="margin-top:8px"><button class="btn ghost" data-act="backupfile">Salva nei Download</button></div>
+      <p class="small mute" style="margin-bottom:0">«Salva backup» apre il menu Condividi di Android: scegli <b>Drive</b>. Se non funziona usa «Salva nei Download» e poi carica il file su Drive. Per ripristinare scegli il file salvato.</p>
       <input type="file" id="restoreFile" accept=".json,.txt,application/json,text/plain" hidden>
     </div>
 
@@ -579,22 +580,28 @@ function downloadFile(file) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
-async function doBackup() {
+async function doBackup(forceDownload) {
   const json = JSON.stringify(db);
   const name = `kakebo-backup-${todayKey()}`;
-  try {
-    // 1) condivisione di Android (permette "Salva su Drive"); alcuni Chrome accettano solo i file di testo
-    const variants = [new File([json], name + '.json', {type: 'application/json'}), new File([json], name + '.json.txt', {type: 'text/plain'})];
-    const shareable = navigator.canShare && variants.find(f => navigator.canShare({files: [f]}));
-    if (shareable) await navigator.share({files: [shareable], title: 'Backup Kakebo'});
-    else downloadFile(variants[0]);                       // 2) scarica nella cartella Download
-    db.settings.lastBackup = Date.now(); save();
-    toast(shareable ? 'Backup condiviso' : 'Backup scaricato nella cartella Download');
-    render();
-  } catch (err) {
-    if (err && err.name === 'AbortError') return;
-    toast('Backup non riuscito: ' + (err.message || err));
+  const variants = [new File([json], name + '.json', {type: 'application/json'}), new File([json], name + '.json.txt', {type: 'text/plain'})];
+  let how = null;
+  // 1) menu Condividi di Android (permette "Salva su Drive"); se Chrome lo rifiuta si passa al punto 2
+  if (!forceDownload && navigator.share && navigator.canShare) {
+    for (const f of variants) {
+      let ok = false; try { ok = navigator.canShare({files: [f]}); } catch (e) {}
+      if (!ok) continue;
+      try { await navigator.share({files: [f], title: 'Backup Kakebo'}); how = 'share'; break; }
+      catch (err) { if (err && err.name === 'AbortError') return; /* altro errore: provo la variante dopo */ }
+    }
   }
+  // 2) salvataggio come file nella cartella Download
+  if (!how) {
+    try { downloadFile(variants[0]); how = 'download'; }
+    catch (err) { toast('Backup non riuscito: ' + (err.message || err)); return; }
+  }
+  db.settings.lastBackup = Date.now(); save();
+  toast(how === 'share' ? 'Backup condiviso' : 'Backup salvato nella cartella Download: caricalo su Drive dall\'app File o Drive');
+  render();
 }
 function doRestore(file) {
   const rd = new FileReader();
@@ -632,6 +639,7 @@ app.addEventListener('click', e => {
   else if (a === 'imp') { const d = ensureDay(state.day); d.refl.imp = b.dataset.v === '1'; save(); $$('[data-act="imp"]').forEach(x => x.classList.toggle('on', x === b)); }
   else if (a === 'rate') { const i = +b.dataset.i; db.rate[i] = !db.rate[i]; save(); render(); }
   else if (a === 'backup') doBackup();
+  else if (a === 'backupfile') doBackup(true);
   else if (a === 'restore') $('#restoreFile').click();
   else if (a === 'chpin') changePin();
   else if (a === 'install') { installEvt.prompt(); installEvt = null; }
