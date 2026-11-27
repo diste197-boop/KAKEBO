@@ -71,6 +71,9 @@ html:not([data-x]) .badge{color:#fff}
 .chips::-webkit-scrollbar{display:none}
 .chip{flex:none;border:1px solid var(--line);background:var(--card);border-radius:22px;padding:8px 12px;display:flex;align-items:center;white-space:nowrap}
 .chip.add{border-style:dashed;color:var(--mute)}
+.chip.ed{border-style:dashed;border-color:var(--acc)}
+.hrow{display:flex;justify-content:space-between;align-items:center}
+.mini{border:0;background:var(--soft);color:var(--acc);border-radius:20px;padding:4px 14px;font-size:.8rem;text-transform:none;letter-spacing:0;font-weight:600}
 
 /* elenco spese */
 .exp{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line);width:100%;background:none;border-left:0;border-right:0;border-bottom:0;text-align:left}
@@ -168,7 +171,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const uid = () => Math.random().toString(36).slice(2, 9);
 const CATS = {S:'Sopravvivenza', V:'Svago e vizi', C:'Cultura e benessere', E:'Extra e imprevisti'};
 const CK = ['S','V','C','E'];
-const APP_VERSION = 'v2';
+const APP_VERSION = 'v3';
 const KEY = 'kakebo.v1', PIN_KEY = 'kakebo.pin', FAIL_KEY = 'kakebo.fail';
 
 /* denaro: sempre in centesimi (interi) per evitare errori di arrotondamento */
@@ -307,7 +310,8 @@ function viewDay() {
   const exps = (d?.exp || []).slice().sort((a, c) => a.t - c.t);
   const isToday = k === todayKey();
   const r = d?.refl || {};
-  const rec = db.recur.map(x => `<button class="chip" data-act="rec" data-id="${x.id}"><i class="dot c${x.cat}"></i>${esc(x.name)}${x.amt ? `&nbsp;<b>${n2(x.amt)}</b>` : ''}</button>`).join('');
+  const ed = !!state.recEdit && db.recur.length > 0;
+  const rec = db.recur.map(x => `<button class="chip${ed ? ' ed' : ''}" data-act="${ed ? 'editrec' : 'rec'}" data-id="${x.id}"><i class="dot c${x.cat}"></i>${ed ? '✎&nbsp;' : ''}${esc(x.name)}${x.amt ? `&nbsp;<b>${n2(x.amt)}</b>` : ''}</button>`).join('');
   return `
   <div class="top"><div class="in">
     <button class="nav-btn" data-act="prev" aria-label="Giorno precedente">‹</button>
@@ -330,8 +334,9 @@ function viewDay() {
     </div>
     <div class="cats4">${CK.map(c => `<div class="cat c${c}"><b>${c}</b><span id="cat-${c}"></span></div>`).join('')}</div>
 
-    <h3>Ripetitive</h3>
+    <h3 class="hrow">Ripetitive${db.recur.length ? `<button class="mini" data-act="toggrec">${ed ? 'Fine' : 'Modifica'}</button>` : ''}</h3>
     <div class="chips">${rec}<button class="chip add" data-act="newrec">+ nuova</button></div>
+    ${ed ? '<div class="small mute" style="margin:-2px 2px 4px">Tocca una ripetitiva per modificarla o eliminarla. Premi «Fine» per tornare ad aggiungerle con un tocco.</div>' : ''}
 
     <h3>Spese di oggi · <span id="n-exp">${exps.length}</span></h3>
     <div class="card" style="padding:4px 12px">${exps.length ? exps.map(e => `
@@ -630,6 +635,7 @@ app.addEventListener('click', e => {
   else if (a === 'wtoday') { state.wk = mondayOf(todayKey()); render(); }
   else if (a === 'openbal') openBalSheet();
   else if (a === 'edit') openExpSheet(b.dataset.id);
+  else if (a === 'toggrec') { state.recEdit = !state.recEdit; render(); }
   else if (a === 'newrec') openRecurSheet();
   else if (a === 'editrec') openRecurSheet(b.dataset.id);
   else if (a === 'rec') {
@@ -675,7 +681,7 @@ app.addEventListener('input', e => {
   if (t.dataset.refl) { ensureDay(state.day).refl[t.dataset.refl] = t.value; pruneDay(state.day); save(); }
   else if (t.dataset.wtext) { (db.weeks[state.wk] ||= {})[t.dataset.wtext] = t.value; save(); }
 });
-$('#nav').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) { state.tab = b.dataset.tab; render(); updateTotals(); } });
+$('#nav').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) { state.tab = b.dataset.tab; state.recEdit = false; render(); updateTotals(); } });
 $('#fab').addEventListener('click', () => openExpSheet());
 addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; if (state.tab === 'set') render(); });
 
