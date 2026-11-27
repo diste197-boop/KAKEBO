@@ -127,10 +127,16 @@ details .lbl:first-of-type{margin-top:10px}
 .err{color:var(--neg);font-size:.85rem;min-height:1.2em;margin-top:8px}
 
 /* rate di scorta */
-.rate{display:flex;gap:14px;align-items:center;justify-content:center;margin:10px 0 4px}
+.rate{display:flex;gap:14px;align-items:flex-start;justify-content:center;margin:10px 0 4px}
+.rcol{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:78px}
 .rate button{width:52px;height:52px;border-radius:50%;border:2px solid var(--acc);background:var(--acc);color:var(--on-acc);font-weight:700}
 .rate button.used{background:transparent;color:var(--acc)}
 
+.kv{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid var(--line);font-size:.92rem}
+.kv:first-child{border-top:0}.kv b{font-variant-numeric:tabular-nums;text-align:right}
+.trfb{background:var(--mute)!important}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.up{color:var(--neg)}
 #toast{position:fixed;left:12px;right:12px;bottom:calc(78px + env(safe-area-inset-bottom));z-index:60;display:none;justify-content:center}
 #toast div{background:#22302a;color:#fff;border-radius:12px;padding:10px 14px;display:flex;gap:14px;align-items:center;max-width:520px;box-shadow:0 4px 14px rgba(0,0,0,.3)}
 #toast button{background:none;border:0;color:#a9d9bf;font-weight:700;padding:0}
@@ -155,6 +161,7 @@ details .lbl:first-of-type{margin-top:10px}
 <nav id="nav" hidden>
   <button data-tab="day"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>Giorno</button>
   <button data-tab="week"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Settimana</button>
+  <button data-tab="month"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9h9"/></svg>Mese</button>
   <button data-tab="set"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>Impostazioni</button>
 </nav>
 <div id="sheetRoot"></div>
@@ -171,12 +178,13 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const uid = () => Math.random().toString(36).slice(2, 9);
 const CATS = {S:'Sopravvivenza', V:'Svago e vizi', C:'Cultura e benessere', E:'Extra e imprevisti'};
 const CK = ['S','V','C','E'];
-const APP_VERSION = 'v3';
+const APP_VERSION = 'v4';
 const KEY = 'kakebo.v1', PIN_KEY = 'kakebo.pin', FAIL_KEY = 'kakebo.fail';
 
 /* denaro: sempre in centesimi (interi) per evitare errori di arrotondamento */
 const n2 = c => (c / 100).toLocaleString('it-IT', {minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: 'always'});
 const eur = c => n2(c) + ' €';
+const eurs = c => (c > 0 ? '+' : '') + eur(c);
 const cell = c => c ? n2(c) : '–';
 function parseMoney(s) {
   s = String(s).trim().replace(/[\s€]/g, '');
@@ -201,6 +209,12 @@ function isoWeek(k) {
 }
 const fmtLong = k => new Intl.DateTimeFormat('it-IT', {weekday:'long', day:'numeric', month:'long', timeZone:'UTC'}).format(parseKey(k));
 const fmtShort = k => new Intl.DateTimeFormat('it-IT', {day:'numeric', month:'short', timeZone:'UTC'}).format(parseKey(k));
+const monthStart = k => k.slice(0, 7) + '-01';
+const monthEnd = k => { const [y, m] = k.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); };
+const addMonths = (k, n) => { const [y, m] = k.split('-').map(Number); return new Date(Date.UTC(y, m - 1 + n, 1)).toISOString().slice(0, 10); };
+const fmtMonthLong = k => new Intl.DateTimeFormat('it-IT', {month: 'long', year: 'numeric', timeZone: 'UTC'}).format(parseKey(k));
+const fmtMonthShort = k => new Intl.DateTimeFormat('it-IT', {month: 'short', year: 'numeric', timeZone: 'UTC'}).format(parseKey(k));
+const ACC = {conto: 'Conto', cash: 'Contanti', tr: 'Trade Republic', intesa: 'Intesa'};
 const fmtDayName = k => new Intl.DateTimeFormat('it-IT', {weekday:'short', timeZone:'UTC'}).format(parseKey(k));
 
 /* =====================  dati  ===================== */
@@ -211,6 +225,7 @@ function norm(d) {
     days: d.days || {},
     weeks: d.weeks || {},
     rate: Array.isArray(d.rate) && d.rate.length === 3 ? d.rate.map(Boolean) : [true, true, true],
+    rateLog: Array.isArray(d.rateLog) && d.rateLog.length === 3 ? d.rateLog : [null, null, null],
     recur: Array.isArray(d.recur) ? d.recur : [],
     settings: Object.assign({lastBackup: null, lastMethod: 'conto', lastCat: 'S', lockSec: 60}, d.settings)
   };
@@ -222,19 +237,51 @@ function save() {
   catch (e) { toast('⚠ Impossibile salvare: spazio o permessi del browser'); }
 }
 function ensureDay(k) {
-  return db.days[k] ||= {exp: [], inc: {conto: 0, cash: 0}, open: null, refl: {imp: null, best: '', redo: '', next: '', note: ''}};
+  const d = db.days[k] ||= {exp: [], trf: [], inc: {conto: 0, cash: 0}, open: null, refl: {imp: null, best: '', redo: '', next: '', note: ''}};
+  d.trf ||= [];
+  return d;
 }
 function pruneDay(k) {
   const d = db.days[k]; if (!d) return;
   const r = d.refl || {};
-  if (!d.exp.length && !(d.inc?.conto) && !(d.inc?.cash) && !d.open && r.imp == null && !r.best && !r.redo && !r.next && !r.note) delete db.days[k];
+  if (!d.exp.length && !(d.trf || []).length && !(d.inc?.conto) && !(d.inc?.cash) && !d.open && r.imp == null && !r.best && !r.redo && !r.next && !r.note) delete db.days[k];
 }
 function daySums(k) {
-  const r = {conto: 0, cash: 0, cat: {S:0, V:0, C:0, E:0}, inc: {conto: 0, cash: 0}};
+  const r = {conto: 0, cash: 0, total: 0, cat: {S:0, V:0, C:0, E:0}, inc: {conto: 0, cash: 0}, trf: {conto: 0, cash: 0},
+             ext: {tr: 0, intesa: 0}, withdrawn: 0, imp: 0, impN: 0};
   const d = db.days[k]; if (!d) return r;
-  for (const e of d.exp) { r[e.m === 'cash' ? 'cash' : 'conto'] += e.amt; r.cat[e.cat] = (r.cat[e.cat] || 0) + e.amt; }
+  for (const e of d.exp) {
+    r[e.m === 'cash' ? 'cash' : 'conto'] += e.amt; r.total += e.amt;
+    r.cat[e.cat] = (r.cat[e.cat] || 0) + e.amt;
+    if (e.imp) { r.imp += e.amt; r.impN++; }
+  }
+  for (const t of d.trf || []) {            // i trasferimenti spostano i saldi ma non sono spese
+    if (t.from === 'conto' || t.from === 'cash') r.trf[t.from] -= t.amt;
+    if (t.to === 'conto' || t.to === 'cash') r.trf[t.to] += t.amt;
+    if (t.to === 'tr' || t.to === 'intesa') r.ext[t.to] += t.amt;
+    if (t.from === 'tr' || t.from === 'intesa') r.ext[t.from] -= t.amt;
+    if (t.from === 'conto' && t.to === 'cash') r.withdrawn += t.amt;
+  }
   r.inc.conto = d.inc?.conto || 0; r.inc.cash = d.inc?.cash || 0;
   return r;
+}
+/* somme su un intervallo di giorni (estremi inclusi) */
+function periodSums(from, to) {
+  const o = {cat: {S:0, V:0, C:0, E:0}, total: 0, inc: {conto: 0, cash: 0}, exp: {conto: 0, cash: 0}, trf: {conto: 0, cash: 0},
+             ext: {tr: 0, intesa: 0}, withdrawn: 0, imp: 0, impN: 0, peak: {k: null, amt: 0}, byDesc: {}};
+  for (let k = from, g = 0; k <= to && g < 400; k = addDays(k, 1), g++) {
+    const x = daySums(k);
+    CK.forEach(c => o.cat[c] += x.cat[c] || 0);
+    o.total += x.total; o.exp.conto += x.conto; o.exp.cash += x.cash;
+    o.inc.conto += x.inc.conto; o.inc.cash += x.inc.cash; o.trf.conto += x.trf.conto; o.trf.cash += x.trf.cash;
+    o.ext.tr += x.ext.tr; o.ext.intesa += x.ext.intesa; o.withdrawn += x.withdrawn; o.imp += x.imp; o.impN += x.impN;
+    if (x.total > o.peak.amt) o.peak = {k, amt: x.total};
+    for (const e of db.days[k]?.exp || []) {
+      const label = (e.desc || CATS[e.cat]).trim(), key = label.toLowerCase();
+      const y = o.byDesc[key] ||= {name: label, amt: 0, n: 0}; y.amt += e.amt; y.n++;
+    }
+  }
+  return o;
 }
 /* saldo iniziale = rettifica manuale del giorno, altrimenti saldo finale del giorno prima */
 function balances(target) {
@@ -244,14 +291,14 @@ function balances(target) {
   for (let k = start, guard = 0; guard < 40000; k = addDays(k, 1), guard++) {
     const d = db.days[k], s = daySums(k);
     const open = d?.open ? {conto: d.open.conto, cash: d.open.cash} : (prev ? {...prev} : {conto: 0, cash: 0});
-    const close = {conto: open.conto + s.inc.conto - s.conto, cash: open.cash + s.inc.cash - s.cash};
+    const close = {conto: open.conto + s.inc.conto - s.conto + s.trf.conto, cash: open.cash + s.inc.cash - s.cash + s.trf.cash};
     prev = close;
     if (k === target) return {open, close, s, adjusted: !!d?.open};
   }
 }
 
 /* =====================  stato e interfaccia  ===================== */
-const state = {tab: 'day', day: todayKey(), wk: mondayOf(todayKey()), lastToday: todayKey()};
+const state = {tab: 'day', day: todayKey(), wk: mondayOf(todayKey()), mo: monthStart(todayKey()), lastToday: todayKey()};
 const app = $('#app');
 let installEvt = null;
 
@@ -287,12 +334,14 @@ addEventListener('popstate', () => {
   if (sheetOpen) { sheetOpen = false; sheetRoot.innerHTML = ''; }
 });
 
+let lastView = '';
 function render() {
-  const t = state.tab;
-  app.innerHTML = t === 'day' ? viewDay() : t === 'week' ? viewWeek() : viewSettings();
+  const t = state.tab, y = window.scrollY, vk = t + state.day + state.wk + state.mo;
+  app.innerHTML = t === 'day' ? viewDay() : t === 'week' ? viewWeek() : t === 'month' ? viewMonth() : viewSettings();
   $$('#nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   $('#fab').hidden = t !== 'day';
-  window.scrollTo(0, 0);
+  window.scrollTo(0, vk === lastView ? y : 0);      // stessa pagina: mantiene la posizione
+  lastView = vk;
   updateTotals();
 }
 
@@ -306,8 +355,9 @@ function backupBanner() {
   return `<div class="banner"><span>${lb ? `Ultimo backup ${days} giorni fa` : 'Nessun backup ancora fatto'}</span><button data-act="backup">Salva ora</button></div>`;
 }
 function viewDay() {
-  const k = state.day, d = db.days[k], b = balances(k);
+  const k = state.day, d = db.days[k], b = balances(k), s = b.s;
   const exps = (d?.exp || []).slice().sort((a, c) => a.t - c.t);
+  const trfs = (d?.trf || []).slice().sort((a, c) => a.t - c.t);
   const isToday = k === todayKey();
   const r = d?.refl || {};
   const ed = !!state.recEdit && db.recur.length > 0;
@@ -329,6 +379,7 @@ function viewDay() {
           <td><input class="in-m" inputmode="decimal" data-inc="conto" placeholder="0" value="${toInput(d?.inc?.conto)}" aria-label="Entrate accredito sul conto"></td>
           <td><input class="in-m" inputmode="decimal" data-inc="cash" placeholder="0" value="${toInput(d?.inc?.cash)}" aria-label="Entrate in contanti"></td><td id="i-tot"></td></tr>
         <tr><td>− Spese</td><td id="s-conto"></td><td id="s-cash"></td><td id="s-tot"></td></tr>
+        ${trfs.length ? '<tr><td>± Trasferimenti</td><td id="t-conto"></td><td id="t-cash"></td><td id="t-tot"></td></tr>' : ''}
         <tr class="fin"><td>Saldo finale</td><td id="c-conto"></td><td id="c-cash"></td><td id="c-tot"></td></tr>
       </table>
     </div>
@@ -342,13 +393,19 @@ function viewDay() {
     <div class="card" style="padding:4px 12px">${exps.length ? exps.map(e => `
       <button class="exp" data-act="edit" data-id="${e.id}">
         <span class="badge c${e.cat}">${e.cat}</span>
-        <span class="t"><div>${esc(e.desc || CATS[e.cat])}</div><div class="small mute">${e.m === 'cash' ? 'Contanti' : 'Conto'}</div></span>
+        <span class="t"><div>${esc(e.desc || CATS[e.cat])}</div><div class="small mute">${e.m === 'cash' ? 'Contanti' : 'Conto'}${e.imp ? ' · ⚡ impulso' : ''}</div></span>
         <span class="a">${n2(e.amt)} €</span></button>`).join('')
       : '<div class="empty">Nessuna spesa. Tocca + per aggiungerne una.</div>'}</div>
 
+    ${trfs.length ? `<h3>Trasferimenti · ${trfs.length}</h3>
+    <div class="card" style="padding:4px 12px">${trfs.map(t => `
+      <button class="exp" data-act="edittrf" data-id="${t.id}">
+        <span class="badge trfb">⇄</span>
+        <span class="t"><div>${esc(ACC[t.from])} → ${esc(ACC[t.to])}</div><div class="small mute">${esc(t.note || 'Trasferimento')}</div></span>
+        <span class="a">${n2(t.amt)} €</span></button>`).join('')}</div>` : ''}
+
     <details class="card"><summary>Riflessione di fine giornata</summary>
-      <label class="lbl">Spese d'impulso oggi?</label>
-      <div class="yn"><button data-act="imp" data-v="1" class="${r.imp === true ? 'on' : ''}">Sì</button><button data-act="imp" data-v="0" class="${r.imp === false ? 'on' : ''}">No</button></div>
+      <div class="small" style="margin:10px 2px 0">⚡ Spese d'impulso oggi: <b>${s.impN}</b>${s.impN ? ` · ${eur(s.imp)}` : ''}</div>
       <label class="lbl">La spesa che mi ha fatto stare meglio</label><input class="field" data-refl="best" value="${esc(r.best)}">
       <label class="lbl">La spesa che rifarei diversamente</label><input class="field" data-refl="redo" value="${esc(r.redo)}">
       <label class="lbl">Cosa posso migliorare domani</label><input class="field" data-refl="next" value="${esc(r.next)}">
@@ -364,29 +421,48 @@ function updateTotals() {
   setText('#o-tot', eur(b.open.conto + b.open.cash));
   setText('#i-tot', eur(s.inc.conto + s.inc.cash));
   setText('#s-conto', eur(s.conto)); setText('#s-cash', eur(s.cash)); setText('#s-tot', eur(s.conto + s.cash));
+  setText('#t-conto', eurs(s.trf.conto)); setText('#t-cash', eurs(s.trf.cash)); setText('#t-tot', eurs(s.trf.conto + s.trf.cash));
   setText('#c-conto', eur(b.close.conto), b.close.conto < 0); setText('#c-cash', eur(b.close.cash), b.close.cash < 0);
   setText('#c-tot', eur(b.close.conto + b.close.cash), b.close.conto + b.close.cash < 0);
   CK.forEach(c => setText('#cat-' + c, eur(s.cat[c] || 0)));
 }
 
-/* ---------- vista SETTIMANA ---------- */
+/* saldo iniziale di un periodo: se il periodo comincia prima del primo giorno registrato, parte dal saldo impostato quel giorno */
+function periodOpen(from, to) {
+  const keys = Object.keys(db.days).sort();
+  if (keys.length && from < keys[0] && keys[0] <= to && db.days[keys[0]].open) return {...db.days[keys[0]].open};
+  return balances(from).open;
+}
+/* tabella saldi condivisa da settimana e mese */
+function balTable(bo, P, bc, ini) {
+  const adj = {conto: bc.conto - (bo.conto + P.inc.conto - P.exp.conto + P.trf.conto), cash: bc.cash - (bo.cash + P.inc.cash - P.exp.cash + P.trf.cash)};
+  const line = (label, a, b, cls = '', signed = false) => {
+    const f = signed ? eurs : eur;
+    return `<tr class="${cls}"><td>${label}</td><td>${f(a)}</td><td>${f(b)}</td><td>${f(a + b)}</td></tr>`;
+  };
+  return `<table>
+    <tr><th></th><th>Conto</th><th>Contanti</th><th>Totale</th></tr>
+    ${line(ini, bo.conto, bo.cash)}
+    ${line('+ Entrate', P.inc.conto, P.inc.cash)}
+    ${line('− Spese', P.exp.conto, P.exp.cash)}
+    ${P.trf.conto || P.trf.cash ? line('± Trasferimenti', P.trf.conto, P.trf.cash, '', true) : ''}
+    ${adj.conto || adj.cash ? line('± Saldo impostato a mano', adj.conto, adj.cash, '', true) : ''}
+    ${line('Saldo finale', bc.conto, bc.cash, 'fin')}
+  </table>`;
+}
+const extNote = (v, a, b) => v ? `<div class="small mute" style="margin-top:6px">${v > 0 ? a : b}: <b>${eur(Math.abs(v))}</b></div>` : '';
+
 function viewWeek() {
   const w = state.wk, days = [...Array(7)].map((_, i) => addDays(w, i));
-  const tot = {S:0, V:0, C:0, E:0}, inc = {conto:0, cash:0}, exp = {conto:0, cash:0};
+  const P = periodSums(w, days[6]);
   const rows = days.map(k => {
-    const s = daySums(k); let t = 0;
-    CK.forEach(c => { tot[c] += s.cat[c]; t += s.cat[c]; });
-    inc.conto += s.inc.conto; inc.cash += s.inc.cash; exp.conto += s.conto; exp.cash += s.cash;
-    return `<tr><td>${esc(fmtDayName(k))} ${parseKey(k).getUTCDate()}</td>${CK.map(c => `<td>${cell(s.cat[c])}</td>`).join('')}<td><b>${cell(t)}</b></td></tr>`;
+    const s = daySums(k);
+    return `<tr><td>${esc(fmtDayName(k))} ${parseKey(k).getUTCDate()}</td>${CK.map(c => `<td>${cell(s.cat[c])}</td>`).join('')}<td><b>${cell(s.total)}</b></td></tr>`;
   }).join('');
-  const grand = CK.reduce((a, c) => a + tot[c], 0);
-  const bo = balances(w).open, bc = balances(days[6]).close;
-  const adj = {conto: bc.conto - (bo.conto + inc.conto - exp.conto), cash: bc.cash - (bo.cash + inc.cash - exp.cash)};
-  const hasAdj = adj.conto || adj.cash;
-  const heavy = grand ? CK.reduce((a, c) => tot[c] > tot[a] ? c : a, 'S') : null;
+  const bo = periodOpen(w, days[6]), bc = balances(days[6]).close;
+  const heavy = P.total ? CK.reduce((a, c) => P.cat[c] > P.cat[a] ? c : a, 'S') : null;
   const ww = db.weeks[w] || {};
   const avail = db.rate.filter(Boolean).length;
-  const line = (label, a, b, cls = '') => `<tr class="${cls}"><td>${label}</td><td>${eur(a)}</td><td>${eur(b)}</td><td>${eur(a + b)}</td></tr>`;
   return `
   <div class="top"><div class="in">
     <button class="nav-btn" data-act="wprev" aria-label="Settimana precedente">‹</button>
@@ -398,42 +474,87 @@ function viewWeek() {
     <div class="card"><table>
       <tr><th></th>${CK.map(c => `<th style="color:var(--c${c})">${c}</th>`).join('')}<th>Tot.</th></tr>
       ${rows}
-      <tr class="fin"><td>Totale</td>${CK.map(c => `<td>${cell(tot[c])}</td>`).join('')}<td>${cell(grand)}</td></tr>
+      <tr class="fin"><td>Totale</td>${CK.map(c => `<td>${cell(P.cat[c])}</td>`).join('')}<td>${cell(P.total)}</td></tr>
     </table>
+    ${P.impN ? `<div class="small" style="margin-top:8px">⚡ Spese d'impulso: <b>${P.impN}</b> · ${eur(P.imp)}${P.total ? ` (${Math.round(P.imp / P.total * 100)}% delle spese)` : ''}</div>` : ''}
     <div class="small mute" style="margin-top:6px">S ${CATS.S} · V ${CATS.V} · C ${CATS.C} · E ${CATS.E}</div></div>
 
     <h3>Saldo della settimana</h3>
-    <div class="card"><table>
-      <tr><th></th><th>Conto</th><th>Contanti</th><th>Totale</th></tr>
-      ${line('Iniziale (lun.)', bo.conto, bo.cash)}
-      ${line('+ Entrate', inc.conto, inc.cash)}
-      ${line('− Spese', exp.conto, exp.cash)}
-      ${hasAdj ? line('± Saldo impostato a mano', adj.conto, adj.cash) : ''}
-      ${line('Saldo finale', bc.conto, bc.cash, 'fin')}
-    </table></div>
+    <div class="card">${balTable(bo, P, bc, 'Iniziale (lun.)')}</div>
 
     <h3>I miei conti</h3>
     <div class="card">
       <b>Trade Republic</b> <span class="small mute">· investimenti in ETF</span>
       <label class="lbl">Saldo (€)</label><input class="field" inputmode="decimal" data-wmoney="tr" placeholder="non inserito" value="${toInput(ww.tr)}">
+      ${extNote(P.ext.tr, 'Versato dal conto in settimana', 'Prelevato in settimana')}
       <label class="lbl">Note sulle variazioni</label><textarea data-wtext="trN">${esc(ww.trN)}</textarea>
     </div>
     <div class="card">
       <b>Intesa</b> <span class="small mute">· rata del mutuo</span>
       <label class="lbl">Saldo (€)</label><input class="field" inputmode="decimal" data-wmoney="in" placeholder="non inserito" value="${toInput(ww.in)}">
+      ${extNote(P.ext.intesa, 'Versato dal conto in settimana', 'Prelevato in settimana')}
       <label class="lbl">Note sulle variazioni</label><textarea data-wtext="inN">${esc(ww.inN)}</textarea>
-      <label class="lbl" style="margin-top:16px">Rate di scorta · tocca per segnare come usata / disponibile</label>
-      <div class="rate">${db.rate.map((a, i) => `<button data-act="rate" data-i="${i}" class="${a ? '' : 'used'}" aria-label="Rata di scorta ${i + 1}: ${a ? 'disponibile' : 'usata'}">${i + 1}</button>`).join('')}</div>
+      <label class="lbl" style="margin-top:16px">Rate di scorta · tocca per segnare l'utilizzo o rimetterla disponibile</label>
+      <div class="rate">${db.rate.map((a, i) => `<div class="rcol"><button data-act="rate" data-i="${i}" class="${a ? '' : 'used'}" aria-label="Rata di scorta ${i + 1}: ${a ? 'disponibile' : 'usata'}">${i + 1}</button><div class="small mute">${a ? 'disponibile' : (db.rateLog[i]?.m ? esc(fmtMonthShort(db.rateLog[i].m + '-01')) : 'usata')}</div></div>`).join('')}</div>
       <div class="small mute" style="text-align:center">Disponibili: <b>${avail} / 3</b></div>
     </div>
 
     <h3>Riflessione della settimana</h3>
     <div class="card">
-      <label class="lbl" style="margin-top:0">La categoria che ha pesato di più${heavy ? ` <span style="color:var(--c${heavy})">(questa settimana: ${heavy} · ${eur(tot[heavy])})</span>` : ''}</label>
+      <label class="lbl" style="margin-top:0">La categoria che ha pesato di più${heavy ? ` <span style="color:var(--c${heavy})">(questa settimana: ${heavy} · ${eur(P.cat[heavy])})</span>` : ''}</label>
       <input class="field" data-wtext="r1" value="${esc(ww.r1)}">
       <label class="lbl">Cosa cambio la prossima settimana</label><input class="field" data-wtext="r2" value="${esc(ww.r2)}">
       <label class="lbl">Obiettivo di risparmio / investimento</label><input class="field" data-wtext="r3" value="${esc(ww.r3)}">
     </div>
+  </main>`;
+}
+
+/* ---------- vista MESE ---------- */
+function viewMonth() {
+  const m = state.mo, end = monthEnd(m), prev = addMonths(m, -1);
+  const P = periodSums(m, end), Q = periodSums(prev, monthEnd(prev));
+  const tk = todayKey(), isCur = tk >= m && tk <= end, isFuture = tk < m;
+  const elapsed = isCur ? parseKey(tk).getUTCDate() : isFuture ? 0 : parseKey(end).getUTCDate();
+  const avg = elapsed ? Math.round(P.total / elapsed) : 0;
+  const bo = periodOpen(m, end), bc = balances(end).close;
+  const hasPrev = Q.total > 0;
+  const top = Object.values(P.byDesc).sort((a, b) => b.amt - a.amt).slice(0, 5);
+  const usedHere = db.rate.map((a, i) => (!a && db.rateLog[i]?.m === m.slice(0, 7)) ? i + 1 : 0).filter(Boolean);
+  const delta = c => {
+    if (!hasPrev) return '–';
+    const dl = P.cat[c] - Q.cat[c];
+    return `<span class="${dl > 0 ? 'up' : ''}">${dl > 0 ? '+' : ''}${n2(dl)}</span>`;
+  };
+  return `
+  <div class="top"><div class="in">
+    <button class="nav-btn" data-act="mprev" aria-label="Mese precedente">‹</button>
+    <div class="datebox"><div class="d">${esc(fmtMonthLong(m))}</div><div class="s">${isCur ? 'mese in corso' : 'riepilogo mensile'}</div></div>
+    <button class="nav-btn" data-act="mnext" aria-label="Mese successivo">›</button>
+  </div>${isCur ? '' : '<button class="todaybtn" data-act="mtoday">Vai a questo mese</button>'}</div>
+  <main>
+    <h3>Spese per categoria</h3>
+    <div class="card"><table>
+      <tr><th></th><th>Totale</th><th>%</th><th>vs prec.</th></tr>
+      ${CK.map(c => `<tr><td><b style="color:var(--c${c})">${c}</b> ${esc(CATS[c])}</td><td>${cell(P.cat[c])}</td><td>${P.total ? Math.round(P.cat[c] / P.total * 100) + '%' : '–'}</td><td>${delta(c)}</td></tr>`).join('')}
+      <tr class="fin"><td>Totale</td><td>${cell(P.total)}</td><td>${P.total ? '100%' : '–'}</td><td>${hasPrev ? `<span class="${P.total > Q.total ? 'up' : ''}">${P.total > Q.total ? '+' : ''}${n2(P.total - Q.total)}</span>` : '–'}</td></tr>
+    </table>${hasPrev ? `<div class="small mute" style="margin-top:6px">Mese precedente (${esc(fmtMonthShort(prev))}): ${eur(Q.total)}. In rosso se hai speso di più.</div>` : ''}</div>
+
+    <h3>Saldo del mese</h3>
+    <div class="card">${balTable(bo, P, bc, 'Iniziale (1°)')}</div>
+
+    <h3>In breve</h3>
+    <div class="card" style="padding:4px 12px">
+      <div class="kv"><span>Spesa media al giorno</span><b>${elapsed ? eur(avg) : '–'}</b></div>
+      <div class="kv"><span>Giorno più costoso</span><b>${P.peak.k ? `${esc(fmtShort(P.peak.k))} · ${eur(P.peak.amt)}` : '–'}</b></div>
+      <div class="kv"><span>⚡ Spese d'impulso</span><b>${P.impN ? `${P.impN} · ${eur(P.imp)}${P.total ? ` (${Math.round(P.imp / P.total * 100)}%)` : ''}` : '–'}</b></div>
+      <div class="kv"><span>Contanti prelevati</span><b>${P.withdrawn ? eur(P.withdrawn) : '–'}</b></div>
+      <div class="kv"><span>Trade Republic</span><b>${P.ext.tr ? `${P.ext.tr > 0 ? 'versati' : 'prelevati'} ${eur(Math.abs(P.ext.tr))}` : '–'}</b></div>
+      <div class="kv"><span>Intesa</span><b>${P.ext.intesa ? `${P.ext.intesa > 0 ? 'versati' : 'prelevati'} ${eur(Math.abs(P.ext.intesa))}` : '–'}</b></div>
+      ${usedHere.length ? `<div class="kv"><span>Rata di scorta usata</span><b>n° ${usedHere.join(', ')}</b></div>` : ''}
+    </div>
+
+    <h3>Le voci più pesanti</h3>
+    <div class="card" style="padding:4px 12px">${top.length ? top.map(x => `<div class="kv"><span>${esc(x.name)} <span class="small mute">× ${x.n}</span></span><b>${eur(x.amt)}</b></div>`).join('') : '<div class="empty">Nessuna spesa in questo mese.</div>'}</div>
   </main>`;
 }
 
@@ -487,54 +608,106 @@ function segMethod(name, val) {
 }
 const radio = (sh, name) => sh.querySelector(`input[name="${name}"]:checked`)?.value;
 
-function openExpSheet(id, pre) {
-  const d = db.days[state.day], e = id ? d?.exp.find(x => x.id === id) : null;
-  const v = e || pre || {};
+function openExpSheet(id, pre) { openEntrySheet('exp', id, pre); }
+function openTrfSheet(id) { openEntrySheet('trf', id); }
+/* un'unica finestra per spese e trasferimenti (per i nuovi movimenti c'è l'interruttore in alto) */
+function openEntrySheet(kind, id, pre) {
+  const d = db.days[state.day];
+  const e = id ? (kind === 'exp' ? d?.exp : d?.trf)?.find(x => x.id === id) : null;
+  const isNew = !e, v = e || pre || {};
   const cat = v.cat || db.settings.lastCat || 'S', m = v.m || db.settings.lastMethod || 'conto';
   const recent = [...new Set(Object.values(db.days).flatMap(x => x.exp.map(y => y.desc)).filter(Boolean))].slice(-40);
+  const accOpts = sel => Object.entries(ACC).map(([k2, n]) => `<option value="${k2}" ${k2 === sel ? 'selected' : ''}>${n}</option>`).join('');
+  const hasExp = isNew || kind === 'exp', hasTrf = isNew || kind === 'trf';
   openSheet(`
-    <h2>${e ? 'Modifica spesa' : 'Nuova spesa'}</h2>
-    <label class="lbl" style="margin-top:0">Importo (€)</label>
+    <h2>${isNew ? 'Nuovo movimento' : kind === 'exp' ? 'Modifica spesa' : 'Modifica trasferimento'}</h2>
+    ${isNew ? '<div class="seg two"><label><input type="radio" name="kind" value="exp" checked><span>Spesa</span></label><label><input type="radio" name="kind" value="trf"><span>⇄ Trasferimento</span></label></div>' : ''}
+    <label class="lbl">Importo (€)</label>
     <input id="f-amt" class="big" inputmode="decimal" autocomplete="off" placeholder="0,00" value="${v.amt ? toInput(v.amt) : ''}">
-    <label class="lbl">Categoria</label>${segCats('cat', cat)}
-    <label class="lbl">Pagato con</label>${segMethod('m', m)}
-    <label class="lbl">Descrizione</label>
-    <input id="f-desc" class="field" autocomplete="off" list="sug" placeholder="es. Spesa Conad" value="${esc(v.desc)}">
-    <datalist id="sug">${recent.map(x => `<option value="${esc(x)}">`).join('')}</datalist>
-    ${e ? '' : '<label class="chk"><input type="checkbox" id="f-rec"> Salva come spesa ripetitiva</label>'}
+    ${hasExp ? `<div id="blk-exp" ${kind === 'exp' ? '' : 'hidden'}>
+      <label class="lbl">Categoria</label>${segCats('cat', cat)}
+      <label class="lbl">Pagato con</label>${segMethod('m', m)}
+      <label class="lbl">Descrizione</label>
+      <input id="f-desc" class="field" autocomplete="off" list="sug" placeholder="es. Spesa Conad" value="${esc(v.desc)}">
+      <datalist id="sug">${recent.map(x => `<option value="${esc(x)}">`).join('')}</datalist>
+      <label class="chk"><input type="checkbox" id="f-imp" ${v.imp ? 'checked' : ''}> ⚡ Spesa d'impulso</label>
+      ${isNew ? '<label class="chk"><input type="checkbox" id="f-rec"> Salva come spesa ripetitiva</label>' : ''}
+    </div>` : ''}
+    ${hasTrf ? `<div id="blk-trf" ${kind === 'trf' ? '' : 'hidden'}>
+      <label class="lbl">Scorciatoie</label>
+      <div class="chips" style="flex-wrap:wrap;overflow:visible">
+        <button type="button" class="chip" data-pre="conto,cash">Prelievo</button>
+        <button type="button" class="chip" data-pre="cash,conto">Versa contanti</button>
+        <button type="button" class="chip" data-pre="conto,tr">Verso Trade Republic</button>
+        <button type="button" class="chip" data-pre="conto,intesa">Verso Intesa</button>
+      </div>
+      <div class="two-col">
+        <div><label class="lbl">Da</label><select id="t-from" class="field">${accOpts(v.from || 'conto')}</select></div>
+        <div><label class="lbl">A</label><select id="t-to" class="field">${accOpts(v.to || 'cash')}</select></div>
+      </div>
+      <label class="lbl">Nota (facoltativa)</label><input id="f-tnote" class="field" autocomplete="off" value="${esc(v.note)}">
+      <p class="small mute" style="margin-bottom:0">Un trasferimento sposta i saldi ma non conta come spesa.</p>
+    </div>` : ''}
     <div class="err" id="f-err"></div>
-    <div class="row"><button class="btn ghost" data-x="close">Annulla</button>${e ? '<button class="btn danger" id="f-del">Elimina</button>' : ''}<button class="btn" id="f-save">Salva</button></div>`,
+    ${isNew ? '' : '<div class="row"><button class="btn ghost" id="f-dup">⧉ Duplica</button><button class="btn danger" id="f-del">Elimina</button></div>'}
+    <div class="row"><button class="btn ghost" data-x="close">Annulla</button><button class="btn" id="f-save">Salva</button></div>`,
   sh => {
     const amt = $('#f-amt', sh); setTimeout(() => amt.focus(), 50);
+    const err = t => { $('#f-err', sh).textContent = t; };
+    const kindNow = () => isNew ? radio(sh, 'kind') : kind;
+    $$('input[name="kind"]', sh).forEach(r => r.onchange = () => {
+      const x = kindNow() === 'exp'; $('#blk-exp', sh).hidden = !x; $('#blk-trf', sh).hidden = x; err('');
+    });
+    $$('[data-pre]', sh).forEach(b => b.onclick = () => {
+      const [a, c] = b.dataset.pre.split(','); $('#t-from', sh).value = a; $('#t-to', sh).value = c;
+    });
     const submit = () => {
       const a = parseMoney(amt.value);
-      if (!(a > 0)) { $('#f-err', sh).textContent = 'Inserisci un importo valido (es. 12,50)'; return; }
-      const c = radio(sh, 'cat'), mm = radio(sh, 'm'), desc = $('#f-desc', sh).value.trim();
-      if (e) Object.assign(e, {amt: a, cat: c, m: mm, desc});
-      else ensureDay(state.day).exp.push({id: uid(), amt: a, cat: c, m: mm, desc, t: Date.now()});
-      db.settings.lastCat = c; db.settings.lastMethod = mm;
-      if ($('#f-rec', sh)?.checked) {
-        const name = desc || CATS[c];
-        if (!db.recur.some(x => x.name === name && x.amt === a && x.cat === c && x.m === mm)) db.recur.push({id: uid(), name, amt: a, cat: c, m: mm});
+      if (!(a > 0)) return err('Inserisci un importo valido (es. 12,50)');
+      if (kindNow() === 'exp') {
+        const c = radio(sh, 'cat'), mm = radio(sh, 'm'), desc = $('#f-desc', sh).value.trim(), imp = $('#f-imp', sh).checked;
+        if (e) Object.assign(e, {amt: a, cat: c, m: mm, desc, imp});
+        else ensureDay(state.day).exp.push({id: uid(), amt: a, cat: c, m: mm, desc, imp, t: Date.now()});
+        db.settings.lastCat = c; db.settings.lastMethod = mm;
+        if ($('#f-rec', sh)?.checked) {
+          const name = desc || CATS[c];
+          if (!db.recur.some(x => x.name === name && x.amt === a && x.cat === c && x.m === mm)) db.recur.push({id: uid(), name, amt: a, cat: c, m: mm, imp});
+        }
+      } else {
+        const from = $('#t-from', sh).value, to = $('#t-to', sh).value, note = $('#f-tnote', sh).value.trim();
+        const tracked = x => x === 'conto' || x === 'cash';
+        if (from === to) return err('Scegli due conti diversi');
+        if (!tracked(from) && !tracked(to)) return err('Almeno uno dei due deve essere Conto o Contanti');
+        if (e) Object.assign(e, {amt: a, from, to, note});
+        else ensureDay(state.day).trf.push({id: uid(), amt: a, from, to, note, t: Date.now()});
       }
-      save(); closeSheet(); render(); updateTotals();
+      save(); closeSheet(); render();
     };
     $('#f-save', sh).onclick = submit;
-    sh.addEventListener('keydown', ev => { if (ev.key === 'Enter') submit(); });
+    sh.addEventListener('keydown', ev => { if (ev.key === 'Enter' && ev.target.tagName !== 'SELECT') submit(); });
+    const list = () => kind === 'exp' ? d.exp : d.trf;
     const del = $('#f-del', sh);
     if (del) del.onclick = () => {
-      if (!confirm('Eliminare questa spesa?')) return;
-      d.exp = d.exp.filter(x => x.id !== id); pruneDay(state.day); save(); closeSheet(); render(); updateTotals();
+      if (!confirm(kind === 'exp' ? 'Eliminare questa spesa?' : 'Eliminare questo trasferimento?')) return;
+      d[kind === 'exp' ? 'exp' : 'trf'] = list().filter(x => x.id !== id); pruneDay(state.day); save(); closeSheet(); render();
+    };
+    const dup = $('#f-dup', sh);
+    if (dup) dup.onclick = () => {
+      const copy = {...e, id: uid(), t: Date.now()}; list().push(copy); save(); closeSheet(); render();
+      toast(kind === 'exp' ? 'Spesa duplicata' : 'Trasferimento duplicato', () => {
+        const dd = db.days[state.day]; if (!dd) return;
+        dd[kind === 'exp' ? 'exp' : 'trf'] = dd[kind === 'exp' ? 'exp' : 'trf'].filter(y => y.id !== copy.id); pruneDay(state.day); save(); render();
+      });
     };
   });
 }
 function addExp(x) {
   const d = ensureDay(state.day);
-  const e = {id: uid(), amt: x.amt, cat: x.cat, m: x.m, desc: x.desc, t: Date.now()};
-  d.exp.push(e); save(); render(); updateTotals();
+  const e = {id: uid(), amt: x.amt, cat: x.cat, m: x.m, desc: x.desc, imp: !!x.imp, t: Date.now()};
+  d.exp.push(e); save(); render();
   toast(`Aggiunta: ${x.desc || CATS[x.cat]} · ${eur(x.amt)}`, () => {
     const dd = db.days[state.day]; if (!dd) return;
-    dd.exp = dd.exp.filter(y => y.id !== e.id); pruneDay(state.day); save(); render(); updateTotals();
+    dd.exp = dd.exp.filter(y => y.id !== e.id); pruneDay(state.day); save(); render();
   });
 }
 function openBalSheet() {
@@ -565,6 +738,7 @@ function openRecurSheet(id) {
     <label class="lbl">Importo (€) · lascia vuoto per chiederlo ogni volta</label><input id="r-amt" class="field" inputmode="decimal" placeholder="importo libero" value="${x?.amt ? toInput(x.amt) : ''}">
     <label class="lbl">Categoria</label>${segCats('rcat', x?.cat || 'S')}
     <label class="lbl">Pagato con</label>${segMethod('rm', x?.m || 'conto')}
+    <label class="chk"><input type="checkbox" id="r-imp" ${x?.imp ? 'checked' : ''}> ⚡ Di solito è una spesa d'impulso</label>
     <div class="err" id="r-err"></div>
     <div class="row"><button class="btn ghost" data-x="close">Annulla</button>${x ? '<button class="btn danger" id="r-del">Elimina</button>' : ''}<button class="btn" id="r-save">Salva</button></div>`,
   sh => {
@@ -572,12 +746,36 @@ function openRecurSheet(id) {
       const name = $('#r-name', sh).value.trim(), a = parseMoney($('#r-amt', sh).value);
       if (!name) { $('#r-err', sh).textContent = 'Dai un nome alla spesa'; return; }
       if (isNaN(a) || a < 0) { $('#r-err', sh).textContent = 'Importo non valido'; return; }
-      const obj = {name, amt: a, cat: radio(sh, 'rcat'), m: radio(sh, 'rm')};
+      const obj = {name, amt: a, cat: radio(sh, 'rcat'), m: radio(sh, 'rm'), imp: $('#r-imp', sh).checked};
       if (x) Object.assign(x, obj); else db.recur.push({id: uid(), ...obj});
       save(); closeSheet(); render();
     };
     const del = $('#r-del', sh);
     if (del) del.onclick = () => { if (confirm('Eliminare questa ripetitiva?')) { db.recur = db.recur.filter(r => r.id !== id); save(); closeSheet(); render(); } };
+  });
+}
+function openRateSheet(i) {
+  const used = !db.rate[i];
+  const cur = db.rateLog[i]?.m || todayKey().slice(0, 7);
+  openSheet(`
+    <h2>Rata di scorta n° ${i + 1}</h2>
+    <p class="small mute" style="margin-top:0">${used ? 'Segnata come usata.' : "Disponibile. Se l'hai usata, indica il mese e l'anno."}</p>
+    <label class="lbl">Mese e anno di utilizzo</label>
+    <input id="rm" type="month" class="field" value="${cur}">
+    <div class="err" id="rm-err"></div>
+    <div class="row"><button class="btn ghost" data-x="close">Annulla</button><button class="btn" id="rm-save">${used ? 'Salva data' : 'Segna come usata'}</button></div>
+    ${used ? '<div class="row"><button class="btn ghost" id="rm-free">Rimetti disponibile</button></div>' : ''}`,
+  sh => {
+    $('#rm-save', sh).onclick = () => {
+      const v = $('#rm', sh).value;
+      if (!/^\d{4}-\d{2}$/.test(v)) { $('#rm-err', sh).textContent = 'Scegli mese e anno (es. 2026-11)'; return; }
+      db.rate[i] = false; db.rateLog[i] = {m: v}; save(); closeSheet(); render();
+    };
+    const fr = $('#rm-free', sh);
+    if (fr) fr.onclick = () => {
+      if (!confirm('Rimettere disponibile la rata di scorta n° ' + (i + 1) + '?')) return;
+      db.rate[i] = true; db.rateLog[i] = null; save(); closeSheet(); render();
+    };
   });
 }
 
@@ -640,11 +838,14 @@ app.addEventListener('click', e => {
   else if (a === 'editrec') openRecurSheet(b.dataset.id);
   else if (a === 'rec') {
     const r = db.recur.find(x => x.id === b.dataset.id); if (!r) return;
-    if (r.amt > 0) addExp({amt: r.amt, cat: r.cat, m: r.m, desc: r.name});
-    else openExpSheet(null, {cat: r.cat, m: r.m, desc: r.name});
+    if (r.amt > 0) addExp({amt: r.amt, cat: r.cat, m: r.m, desc: r.name, imp: r.imp});
+    else openExpSheet(null, {cat: r.cat, m: r.m, desc: r.name, imp: r.imp});
   }
-  else if (a === 'imp') { const d = ensureDay(state.day); d.refl.imp = b.dataset.v === '1'; save(); $$('[data-act="imp"]').forEach(x => x.classList.toggle('on', x === b)); }
-  else if (a === 'rate') { const i = +b.dataset.i; db.rate[i] = !db.rate[i]; save(); render(); }
+  else if (a === 'rate') openRateSheet(+b.dataset.i);
+  else if (a === 'edittrf') openTrfSheet(b.dataset.id);
+  else if (a === 'mprev') { state.mo = addMonths(state.mo, -1); render(); }
+  else if (a === 'mnext') { state.mo = addMonths(state.mo, 1); render(); }
+  else if (a === 'mtoday') { state.mo = monthStart(todayKey()); render(); }
   else if (a === 'backup') doBackup();
   else if (a === 'backupfile') doBackup(true);
   else if (a === 'restore') $('#restoreFile').click();
@@ -774,7 +975,7 @@ async function unlock() {
     lockEl.hidden = true; lockEl.innerHTML = ''; locked = false;
     document.documentElement.classList.remove('curtain');
     $('#nav').hidden = false;
-    state.day = todayKey(); state.wk = mondayOf(todayKey()); state.lastToday = todayKey();
+    state.day = todayKey(); state.wk = mondayOf(todayKey()); state.mo = monthStart(todayKey()); state.lastToday = todayKey();
     render(); updateTotals();
     navigator.storage?.persist?.();
     if (first && !Object.keys(db.days).length) openBalSheet();      // primo avvio: saldi iniziali
@@ -789,7 +990,7 @@ document.addEventListener('visibilitychange', () => {
     unlock();
   } else if (!locked) {
     document.documentElement.classList.remove('curtain');
-    if (state.lastToday !== todayKey()) { state.lastToday = todayKey(); state.day = todayKey(); state.wk = mondayOf(todayKey()); render(); updateTotals(); }
+    if (state.lastToday !== todayKey()) { state.lastToday = todayKey(); state.day = todayKey(); state.wk = mondayOf(todayKey()); state.mo = monthStart(todayKey()); render(); }
   }
 });
 
