@@ -2,7 +2,7 @@
 // Strategia "stale-while-revalidate": risponde subito dalla cache e aggiorna in background,
 // quindi le modifiche a index.html compaiono alla riapertura successiva.
 // Per forzare un aggiornamento immediato cambia il numero di versione qui sotto.
-const CACHE = 'kakebo-v4';
+const CACHE = 'kakebo-v5';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

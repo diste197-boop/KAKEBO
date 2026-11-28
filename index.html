@@ -178,7 +178,15 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const uid = () => Math.random().toString(36).slice(2, 9);
 const CATS = {S:'Sopravvivenza', V:'Svago e vizi', C:'Cultura e benessere', E:'Extra e imprevisti'};
 const CK = ['S','V','C','E'];
-const APP_VERSION = 'v4';
+/* voci di spesa: sottocategorie che contano dentro una categoria Kakebo */
+const DEFAULT_SUBS = [
+  {id: 'casa', name: 'Gestione Casa', cat: 'S'},
+  {id: 'spesa', name: 'Spesa alimentare', cat: 'S'},
+  {id: 'auto', name: 'Auto e trasporti', cat: 'S'},
+  {id: 'salute', name: 'Salute e farmacia', cat: 'S'},
+  {id: 'famiglia', name: 'Famiglia e figli', cat: 'S'}
+];
+const APP_VERSION = 'v5';
 const KEY = 'kakebo.v1', PIN_KEY = 'kakebo.pin', FAIL_KEY = 'kakebo.fail';
 
 /* denaro: sempre in centesimi (interi) per evitare errori di arrotondamento */
@@ -227,7 +235,8 @@ function norm(d) {
     rate: Array.isArray(d.rate) && d.rate.length === 3 ? d.rate.map(Boolean) : [true, true, true],
     rateLog: Array.isArray(d.rateLog) && d.rateLog.length === 3 ? d.rateLog : [null, null, null],
     recur: Array.isArray(d.recur) ? d.recur : [],
-    settings: Object.assign({lastBackup: null, lastMethod: 'conto', lastCat: 'S', lockSec: 60}, d.settings)
+    subs: Array.isArray(d.subs) ? d.subs : DEFAULT_SUBS.map(x => ({...x})),
+    settings: Object.assign({lastBackup: null, lastMethod: 'conto', lastCat: 'S', lastSub: null, lockSec: 60}, d.settings)
   };
 }
 function load() { try { return norm(JSON.parse(localStorage.getItem(KEY))); } catch (e) { return norm({}); } }
@@ -268,7 +277,7 @@ function daySums(k) {
 /* somme su un intervallo di giorni (estremi inclusi) */
 function periodSums(from, to) {
   const o = {cat: {S:0, V:0, C:0, E:0}, total: 0, inc: {conto: 0, cash: 0}, exp: {conto: 0, cash: 0}, trf: {conto: 0, cash: 0},
-             ext: {tr: 0, intesa: 0}, withdrawn: 0, imp: 0, impN: 0, peak: {k: null, amt: 0}, byDesc: {}};
+             ext: {tr: 0, intesa: 0}, withdrawn: 0, imp: 0, impN: 0, peak: {k: null, amt: 0}, byDesc: {}, bySub: {}};
   for (let k = from, g = 0; k <= to && g < 400; k = addDays(k, 1), g++) {
     const x = daySums(k);
     CK.forEach(c => o.cat[c] += x.cat[c] || 0);
@@ -277,7 +286,8 @@ function periodSums(from, to) {
     o.ext.tr += x.ext.tr; o.ext.intesa += x.ext.intesa; o.withdrawn += x.withdrawn; o.imp += x.imp; o.impN += x.impN;
     if (x.total > o.peak.amt) o.peak = {k, amt: x.total};
     for (const e of db.days[k]?.exp || []) {
-      const label = (e.desc || CATS[e.cat]).trim(), key = label.toLowerCase();
+      if (e.sub && db.subs.some(z => z.id === e.sub)) o.bySub[e.sub] = (o.bySub[e.sub] || 0) + e.amt;
+      const label = (e.desc || subName(e.sub) || CATS[e.cat]).trim(), key = label.toLowerCase();
       const y = o.byDesc[key] ||= {name: label, amt: 0, n: 0}; y.amt += e.amt; y.n++;
     }
   }
@@ -393,7 +403,7 @@ function viewDay() {
     <div class="card" style="padding:4px 12px">${exps.length ? exps.map(e => `
       <button class="exp" data-act="edit" data-id="${e.id}">
         <span class="badge c${e.cat}">${e.cat}</span>
-        <span class="t"><div>${esc(e.desc || CATS[e.cat])}</div><div class="small mute">${e.m === 'cash' ? 'Contanti' : 'Conto'}${e.imp ? ' · ⚡ impulso' : ''}</div></span>
+        <span class="t"><div>${esc(e.desc || subName(e.sub) || CATS[e.cat])}</div><div class="small mute">${e.desc && subName(e.sub) ? esc(subName(e.sub)) + ' · ' : ''}${e.m === 'cash' ? 'Contanti' : 'Conto'}${e.imp ? ' · ⚡ impulso' : ''}</div></span>
         <span class="a">${n2(e.amt)} €</span></button>`).join('')
       : '<div class="empty">Nessuna spesa. Tocca + per aggiungerne una.</div>'}</div>
 
@@ -519,6 +529,8 @@ function viewMonth() {
   const bo = periodOpen(m, end), bc = balances(end).close;
   const hasPrev = Q.total > 0;
   const top = Object.values(P.byDesc).sort((a, b) => b.amt - a.amt).slice(0, 5);
+  const subRows = db.subs.map(x => ({...x, amt: P.bySub[x.id] || 0})).filter(x => x.amt > 0).sort((a, b) => b.amt - a.amt);
+  const noSub = P.total - subRows.reduce((a, x) => a + x.amt, 0);
   const usedHere = db.rate.map((a, i) => (!a && db.rateLog[i]?.m === m.slice(0, 7)) ? i + 1 : 0).filter(Boolean);
   const delta = c => {
     if (!hasPrev) return '–';
@@ -538,6 +550,10 @@ function viewMonth() {
       ${CK.map(c => `<tr><td><b style="color:var(--c${c})">${c}</b> ${esc(CATS[c])}</td><td>${cell(P.cat[c])}</td><td>${P.total ? Math.round(P.cat[c] / P.total * 100) + '%' : '–'}</td><td>${delta(c)}</td></tr>`).join('')}
       <tr class="fin"><td>Totale</td><td>${cell(P.total)}</td><td>${P.total ? '100%' : '–'}</td><td>${hasPrev ? `<span class="${P.total > Q.total ? 'up' : ''}">${P.total > Q.total ? '+' : ''}${n2(P.total - Q.total)}</span>` : '–'}</td></tr>
     </table>${hasPrev ? `<div class="small mute" style="margin-top:6px">Mese precedente (${esc(fmtMonthShort(prev))}): ${eur(Q.total)}. In rosso se hai speso di più.</div>` : ''}</div>
+
+    ${subRows.length ? `<h3>Dettaglio per voce</h3>
+    <div class="card" style="padding:4px 12px">${subRows.map(x => `<div class="kv"><span><i class="dot c${x.cat}"></i>${esc(x.name)}</span><b>${eur(x.amt)} <span class="small mute">${P.total ? Math.round(x.amt / P.total * 100) : 0}%</span></b></div>`).join('')}
+      ${noSub > 0 ? `<div class="kv"><span class="mute">Senza voce</span><b>${eur(noSub)}</b></div>` : ''}</div>` : ''}
 
     <h3>Saldo del mese</h3>
     <div class="card">${balTable(bo, P, bc, 'Iniziale (1°)')}</div>
@@ -582,6 +598,15 @@ function viewSettings() {
       <button class="list-btn" data-act="newrec" style="color:var(--acc);font-weight:600">+ Aggiungi ripetitiva</button>
     </div>
 
+    <h3>Voci di spesa</h3>
+    <div class="card" style="padding:4px 12px">
+      ${db.subs.length ? db.subs.map(x => `<button class="list-btn" data-act="editsub" data-id="${x.id}">
+        <span><i class="dot c${x.cat}"></i>${esc(x.name)}</span><span class="small mute">${x.cat} · ${esc(CATS[x.cat])}</span></button>`).join('')
+        : '<div class="empty">Nessuna ancora.</div>'}
+      <button class="list-btn" data-act="newsub" style="color:var(--acc);font-weight:600">+ Aggiungi voce</button>
+    </div>
+    <p class="small mute" style="margin:6px 2px 0">Le voci compaiono nel menù «Categoria» quando inserisci una spesa.</p>
+
     <h3>Sicurezza</h3>
     <div class="card">
       <label class="lbl" style="margin-top:0">Blocca l'app</label>
@@ -600,9 +625,17 @@ function viewSettings() {
 }
 
 /* =====================  finestre: spesa, saldo, ripetitiva  ===================== */
-function segCats(name, val) {
-  return `<div class="seg four">${CK.map(c => `<label style="--c:var(--c${c})"><input type="radio" name="${name}" value="${c}" ${c === val ? 'checked' : ''}><span><b>${c}</b><small>${CATS[c]}</small></span></label>`).join('')}</div>`;
+/* menù a tendina: categorie Kakebo come gruppi, con dentro la voce generale e le voci di spesa */
+const subName = id => id ? (db.subs.find(x => x.id === id)?.name || '') : '';
+function catSelect(id, cat, sub) {
+  const s0 = sub && db.subs.find(x => x.id === sub);
+  const cur = s0 ? `${s0.cat}|${s0.id}` : cat;
+  return `<select id="${id}" class="field">${CK.map(c => `<optgroup label="${c} · ${esc(CATS[c])}">
+    <option value="${c}" ${cur === c ? 'selected' : ''}>${esc(CATS[c])} (generale)</option>
+    ${db.subs.filter(x => x.cat === c).map(x => `<option value="${c}|${x.id}" ${cur === `${c}|${x.id}` ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+  </optgroup>`).join('')}</select>`;
 }
+function readCat(v) { const [cat, sub] = String(v).split('|'); return {cat, sub: sub || undefined}; }
 function segMethod(name, val) {
   return `<div class="seg two"><label><input type="radio" name="${name}" value="conto" ${val !== 'cash' ? 'checked' : ''}><span>💳 Conto</span></label><label><input type="radio" name="${name}" value="cash" ${val === 'cash' ? 'checked' : ''}><span>💶 Contanti</span></label></div>`;
 }
@@ -615,7 +648,7 @@ function openEntrySheet(kind, id, pre) {
   const d = db.days[state.day];
   const e = id ? (kind === 'exp' ? d?.exp : d?.trf)?.find(x => x.id === id) : null;
   const isNew = !e, v = e || pre || {};
-  const cat = v.cat || db.settings.lastCat || 'S', m = v.m || db.settings.lastMethod || 'conto';
+  const cat = v.cat || db.settings.lastCat || 'S', sub = v.cat ? v.sub : db.settings.lastSub, m = v.m || db.settings.lastMethod || 'conto';
   const recent = [...new Set(Object.values(db.days).flatMap(x => x.exp.map(y => y.desc)).filter(Boolean))].slice(-40);
   const accOpts = sel => Object.entries(ACC).map(([k2, n]) => `<option value="${k2}" ${k2 === sel ? 'selected' : ''}>${n}</option>`).join('');
   const hasExp = isNew || kind === 'exp', hasTrf = isNew || kind === 'trf';
@@ -625,7 +658,7 @@ function openEntrySheet(kind, id, pre) {
     <label class="lbl">Importo (€)</label>
     <input id="f-amt" class="big" inputmode="decimal" autocomplete="off" placeholder="0,00" value="${v.amt ? toInput(v.amt) : ''}">
     ${hasExp ? `<div id="blk-exp" ${kind === 'exp' ? '' : 'hidden'}>
-      <label class="lbl">Categoria</label>${segCats('cat', cat)}
+      <label class="lbl">Categoria</label>${catSelect('f-cat', cat, sub)}
       <label class="lbl">Pagato con</label>${segMethod('m', m)}
       <label class="lbl">Descrizione</label>
       <input id="f-desc" class="field" autocomplete="off" list="sug" placeholder="es. Spesa Conad" value="${esc(v.desc)}">
@@ -665,13 +698,13 @@ function openEntrySheet(kind, id, pre) {
       const a = parseMoney(amt.value);
       if (!(a > 0)) return err('Inserisci un importo valido (es. 12,50)');
       if (kindNow() === 'exp') {
-        const c = radio(sh, 'cat'), mm = radio(sh, 'm'), desc = $('#f-desc', sh).value.trim(), imp = $('#f-imp', sh).checked;
-        if (e) Object.assign(e, {amt: a, cat: c, m: mm, desc, imp});
-        else ensureDay(state.day).exp.push({id: uid(), amt: a, cat: c, m: mm, desc, imp, t: Date.now()});
-        db.settings.lastCat = c; db.settings.lastMethod = mm;
+        const {cat: c, sub: sb} = readCat($('#f-cat', sh).value), mm = radio(sh, 'm'), desc = $('#f-desc', sh).value.trim(), imp = $('#f-imp', sh).checked;
+        if (e) Object.assign(e, {amt: a, cat: c, sub: sb, m: mm, desc, imp});
+        else ensureDay(state.day).exp.push({id: uid(), amt: a, cat: c, sub: sb, m: mm, desc, imp, t: Date.now()});
+        db.settings.lastCat = c; db.settings.lastSub = sb || null; db.settings.lastMethod = mm;
         if ($('#f-rec', sh)?.checked) {
-          const name = desc || CATS[c];
-          if (!db.recur.some(x => x.name === name && x.amt === a && x.cat === c && x.m === mm)) db.recur.push({id: uid(), name, amt: a, cat: c, m: mm, imp});
+          const name = desc || subName(sb) || CATS[c];
+          if (!db.recur.some(x => x.name === name && x.amt === a && x.cat === c && x.sub === sb && x.m === mm)) db.recur.push({id: uid(), name, amt: a, cat: c, sub: sb, m: mm, imp});
         }
       } else {
         const from = $('#t-from', sh).value, to = $('#t-to', sh).value, note = $('#f-tnote', sh).value.trim();
@@ -703,9 +736,9 @@ function openEntrySheet(kind, id, pre) {
 }
 function addExp(x) {
   const d = ensureDay(state.day);
-  const e = {id: uid(), amt: x.amt, cat: x.cat, m: x.m, desc: x.desc, imp: !!x.imp, t: Date.now()};
+  const e = {id: uid(), amt: x.amt, cat: x.cat, sub: x.sub, m: x.m, desc: x.desc, imp: !!x.imp, t: Date.now()};
   d.exp.push(e); save(); render();
-  toast(`Aggiunta: ${x.desc || CATS[x.cat]} · ${eur(x.amt)}`, () => {
+  toast(`Aggiunta: ${x.desc || subName(x.sub) || CATS[x.cat]} · ${eur(x.amt)}`, () => {
     const dd = db.days[state.day]; if (!dd) return;
     dd.exp = dd.exp.filter(y => y.id !== e.id); pruneDay(state.day); save(); render();
   });
@@ -736,7 +769,7 @@ function openRecurSheet(id) {
     <h2>${x ? 'Modifica ripetitiva' : 'Nuova spesa ripetitiva'}</h2>
     <label class="lbl" style="margin-top:0">Nome</label><input id="r-name" class="field" placeholder="es. Caffè" value="${esc(x?.name)}">
     <label class="lbl">Importo (€) · lascia vuoto per chiederlo ogni volta</label><input id="r-amt" class="field" inputmode="decimal" placeholder="importo libero" value="${x?.amt ? toInput(x.amt) : ''}">
-    <label class="lbl">Categoria</label>${segCats('rcat', x?.cat || 'S')}
+    <label class="lbl">Categoria</label>${catSelect('r-cat', x?.cat || 'S', x?.sub)}
     <label class="lbl">Pagato con</label>${segMethod('rm', x?.m || 'conto')}
     <label class="chk"><input type="checkbox" id="r-imp" ${x?.imp ? 'checked' : ''}> ⚡ Di solito è una spesa d'impulso</label>
     <div class="err" id="r-err"></div>
@@ -746,12 +779,37 @@ function openRecurSheet(id) {
       const name = $('#r-name', sh).value.trim(), a = parseMoney($('#r-amt', sh).value);
       if (!name) { $('#r-err', sh).textContent = 'Dai un nome alla spesa'; return; }
       if (isNaN(a) || a < 0) { $('#r-err', sh).textContent = 'Importo non valido'; return; }
-      const obj = {name, amt: a, cat: radio(sh, 'rcat'), m: radio(sh, 'rm'), imp: $('#r-imp', sh).checked};
+      const obj = {name, amt: a, ...readCat($('#r-cat', sh).value), m: radio(sh, 'rm'), imp: $('#r-imp', sh).checked};
       if (x) Object.assign(x, obj); else db.recur.push({id: uid(), ...obj});
       save(); closeSheet(); render();
     };
     const del = $('#r-del', sh);
     if (del) del.onclick = () => { if (confirm('Eliminare questa ripetitiva?')) { db.recur = db.recur.filter(r => r.id !== id); save(); closeSheet(); render(); } };
+  });
+}
+function openSubSheet(id) {
+  const x = id ? db.subs.find(z => z.id === id) : null;
+  openSheet(`
+    <h2>${x ? 'Modifica voce di spesa' : 'Nuova voce di spesa'}</h2>
+    <label class="lbl" style="margin-top:0">Nome</label><input id="s-name" class="field" autocomplete="off" placeholder="es. Gestione Casa" value="${esc(x?.name)}">
+    <label class="lbl">Dentro quale categoria Kakebo</label>
+    <select id="s-cat" class="field">${CK.map(c => `<option value="${c}" ${c === (x?.cat || 'S') ? 'selected' : ''}>${c} · ${esc(CATS[c])}</option>`).join('')}</select>
+    <p class="small mute">La voce conta dentro la categoria scelta, quindi i totali S/V/C/E non cambiano.${x ? ' Le spese già registrate restano dove sono.' : ''}</p>
+    <div class="err" id="s-err"></div>
+    <div class="row"><button class="btn ghost" data-x="close">Annulla</button>${x ? '<button class="btn danger" id="s-del">Elimina</button>' : ''}<button class="btn" id="s-save">Salva</button></div>`,
+  sh => {
+    $('#s-save', sh).onclick = () => {
+      const name = $('#s-name', sh).value.trim(), cat = $('#s-cat', sh).value;
+      if (!name) { $('#s-err', sh).textContent = 'Dai un nome alla voce'; return; }
+      if (db.subs.some(z => z.id !== id && z.name.toLowerCase() === name.toLowerCase())) { $('#s-err', sh).textContent = 'Esiste già una voce con questo nome'; return; }
+      if (x) Object.assign(x, {name, cat}); else db.subs.push({id: uid(), name, cat});
+      save(); closeSheet(); render();
+    };
+    const del = $('#s-del', sh);
+    if (del) del.onclick = () => {
+      if (!confirm('Eliminare la voce? Le spese già registrate restano nella loro categoria ma non hanno più la voce.')) return;
+      db.subs = db.subs.filter(z => z.id !== id); save(); closeSheet(); render();
+    };
   });
 }
 function openRateSheet(i) {
@@ -838,11 +896,13 @@ app.addEventListener('click', e => {
   else if (a === 'editrec') openRecurSheet(b.dataset.id);
   else if (a === 'rec') {
     const r = db.recur.find(x => x.id === b.dataset.id); if (!r) return;
-    if (r.amt > 0) addExp({amt: r.amt, cat: r.cat, m: r.m, desc: r.name, imp: r.imp});
-    else openExpSheet(null, {cat: r.cat, m: r.m, desc: r.name, imp: r.imp});
+    if (r.amt > 0) addExp({amt: r.amt, cat: r.cat, sub: r.sub, m: r.m, desc: r.name, imp: r.imp});
+    else openExpSheet(null, {cat: r.cat, sub: r.sub, m: r.m, desc: r.name, imp: r.imp});
   }
   else if (a === 'rate') openRateSheet(+b.dataset.i);
   else if (a === 'edittrf') openTrfSheet(b.dataset.id);
+  else if (a === 'newsub') openSubSheet();
+  else if (a === 'editsub') openSubSheet(b.dataset.id);
   else if (a === 'mprev') { state.mo = addMonths(state.mo, -1); render(); }
   else if (a === 'mnext') { state.mo = addMonths(state.mo, 1); render(); }
   else if (a === 'mtoday') { state.mo = monthStart(todayKey()); render(); }
